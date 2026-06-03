@@ -1,0 +1,99 @@
+---
+title: "Eating_disorder_self-esteem_analysis"
+output: html_document
+date: "2026-06-03"
+---
+
+```{r}
+install.packages('psych')
+```
+
+`
+```{r}
+# Eating Disorders & Self-Esteem Contingencies - Analysis Script
+# Author: Matthew Gibbs
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(broom)
+library(psych)
+
+
+# Load and clean data
+data <- read_csv("/Users/matthewgibbs/Documents/Prior Education /Sussex University Psychology/Year 3/Research Dissertation/Creating The Dissertation/Data/DissDataA+G.csv", show_col_types = FALSE)
+
+# Keep only complete responses (no zeros on key measures)
+analytic <- data %>%
+  filter(if_all(c(SC2, SC3, SC4, SC5), ~ .x != 0)) %>%
+  mutate(
+    Gender = factor(Gender, levels = c("1", "2"), labels = c("Male", "Female")),
+    Age = as.numeric(Age),
+    EDEQ = as.numeric(SC2),
+    SCS = as.numeric(SC3),
+    RSES = as.numeric(SC4),
+    DERS = as.numeric(SC5)
+  )
+
+# Final sample size: 138 participants
+
+# Descriptive statistics
+descriptives <- analytic %>%
+  summarise(
+    n = n(),
+    EDEQ_mean = mean(EDEQ), EDEQ_sd = sd(EDEQ),
+    SCS_mean = mean(SCS), SCS_sd = sd(SCS),
+    RSES_mean = mean(RSES), RSES_sd = sd(RSES),
+    DERS_mean = mean(DERS), DERS_sd = sd(DERS)
+  )
+
+print(descriptives)
+
+# Correlation matrix
+cor_matrix <- analytic %>%
+  select(EDEQ, SCS, RSES, DERS) %>%
+  cor(use = "pairwise.complete.obs")
+
+print(round(cor_matrix, 3))
+
+# Hierarchical regression 
+
+# Step 1: RSES + DERS
+model_step1 <- lm(EDEQ ~ RSES + DERS, data = analytic)
+
+# Step 2: Add SCS
+model_step2 <- lm(EDEQ ~ RSES + DERS + SCS, data = analytic)
+
+# Compare models
+anova(model_step1, model_step2)
+
+# Step 2 coefficients (final model)
+tidy(model_step2, conf.int = TRUE) %>%
+  filter(term != "(Intercept)")
+
+# R-squared change
+r2_step1 <- summary(model_step1)$r.squared
+r2_step2 <- summary(model_step2)$r.squared
+r2_change <- r2_step2 - r2_step1
+
+cat("R² Step 1:", round(r2_step1, 3), "\n")
+cat("R² Step 2:", round(r2_step2, 3), "\n")
+cat("ΔR²:", round(r2_change, 3), "\n")
+
+# Key visualisation 
+
+# Scatter plot: EDE-Q vs Self-Compassion
+ggplot(analytic, aes(x = SCS, y = EDEQ)) +
+  geom_point(alpha = 0.6, color = "darkblue") +
+  geom_smooth(method = "lm", se = TRUE, color = "red") +
+  labs(
+    title = "Eating Disorder Symptoms vs Self-Compassion",
+    x = "Self-Compassion Scale (SCS)",
+    y = "EDE-Q Total Score"
+  ) +
+  theme_minimal()
+
+# 7. Reliability (Cronbach's alpha) For EDE-Q subscales 
+alpha_total <- psych::alpha(edeq_df)
+cat("Total EDE-Q α:", round(alpha_total$total$raw_alpha, 2))
+```
