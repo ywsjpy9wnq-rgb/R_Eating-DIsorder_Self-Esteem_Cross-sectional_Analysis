@@ -1,0 +1,537 @@
+---
+title: "ED_Self-Esteem_Analysis"
+output: html_document
+date: "2026-06-04"
+---
+
+```{r}
+#Code Chunk 1
+
+library(readr)
+library(dplyr)
+library(broom)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(tidyr)
+library(psych)  
+library(purrr)
+library(ggplot2)
+library(tibble)
+
+
+data <- read_csv("/Users/matthewgibbs/Documents/Work/Coding/DissDataA+G2.csv")
+
+# Clean data:
+summary_data_clean <- data %>%
+  filter(!(is.na(SC2) & is.na(SC3) & is.na(SC4) & is.na(SC5))) %>%
+  select(ResponseId, SC2, SC3, SC4, SC5) %>%
+  mutate(across(c(SC2, SC3, SC4, SC5), ~ suppressWarnings(as.numeric(.)))) %>%
+  filter(if_all(c(SC2, SC3, SC4, SC5), ~ !is.na(.) & !is.nan(.) & !is.infinite(.))) %>%
+  filter(if_all(c(SC2, SC3, SC4, SC5), ~ .x != 0))
+
+n_before <- nrow(summary_data_clean)
+
+summary_data_clean <- summary_data_clean %>%
+  filter(if_all(c(SC2, SC3, SC4, SC5), ~ .x != 0))
+
+n_after <- nrow(summary_data_clean)
+
+cat("Rows removed (had 0 in SC2–SC5):", n_before - n_after, "\n")
+cat("Rows remaining:", n_after, "\n")
+
+cat("Cleaned data summary:\n")
+print(summary(summary_data_clean))
+cat("Number of valid responses after dropping zeros:", nrow(summary_data_clean), "\n")
+
+# Descriptive statistics
+descriptives <- summary_data_clean %>% 
+  summarise(
+    n          = n(),                    
+
+    EDEQ_mean  = mean(SC2),
+    EDEQ_sd    = sd(SC2),
+    EDEQ_ci_l  = EDEQ_mean - qt(.975, n - 1) * EDEQ_sd / sqrt(n),
+    EDEQ_ci_u  = EDEQ_mean + qt(.975, n - 1) * EDEQ_sd / sqrt(n),
+
+    SCS_mean   = mean(SC3),
+    SCS_sd     = sd(SC3),
+    SCS_ci_l   = SCS_mean  - qt(.975, n - 1) * SCS_sd  / sqrt(n),
+    SCS_ci_u   = SCS_mean  + qt(.975, n - 1) * SCS_sd  / sqrt(n),
+
+    RSES_mean  = mean(SC4),
+    RSES_sd    = sd(SC4),
+    RSES_ci_l  = RSES_mean - qt(.975, n - 1) * RSES_sd / sqrt(n),
+    RSES_ci_u  = RSES_mean + qt(.975, n - 1) * RSES_sd / sqrt(n),
+
+    DERS_mean  = mean(SC5),
+    DERS_sd    = sd(SC5),
+    DERS_ci_l  = DERS_mean - qt(.975, n - 1) * DERS_sd / sqrt(n),
+    DERS_ci_u  = DERS_mean + qt(.975, n - 1) * DERS_sd / sqrt(n)
+  ) %>% 
+  select(-n)                            
+
+
+print("Descriptive Statistics:")
+print(descriptives)
+
+preds    <- summary_data_clean %>% 
+  select(
+    SCS  = SC3,   # Self‐Compassion Scale
+    RSES = SC4,   # Rosenberg Self‐Esteem Scale
+    DERS = SC5    # Difficulties in Emotion Regulation Scale
+  )
+corr_res <- psych::corr.test(preds, use = "pairwise.complete.obs")
+
+print(preds)
+
+#Histogram and Shapiro-Wilk test for normality
+ggplot(summary_data_clean, aes(x = SC2)) +
+  geom_histogram(binwidth = 1, fill = "grey", color = "black") +
+  labs(title = "Histogram of EDE-Q (SC2)", x = "EDE-Q Score", y = "Frequency")
+
+shapiro_result <- shapiro.test(summary_data_clean$SC2)
+print("Shapiro-Wilk Test for Normality of EDE-Q:")
+print(shapiro_result)
+
+# Regression Analysis:
+model_EDE <- lm(SC2 ~ SC3 + SC4 + SC5, data = summary_data_clean)
+
+
+model_EDE_summary <- tidy(model_EDE, conf.int = TRUE)
+
+rename_predictors <- function(df, model_name) {
+  df %>%
+    mutate(Model = model_name,
+           term = dplyr::recode(term,
+                                `(Intercept)` = "Intercept",
+                                "SC2" = "EDE-Q",
+                                "SC3" = "SCS",
+                                "SC4" = "RSES",
+                                "SC5" = "DERS"))
+}
+
+
+model_EDE_summary <- rename_predictors(model_EDE_summary, "EDE-Q Model")
+
+
+kable(model_EDE_summary, digits = 3,
+      caption = "Regression Model: EDE-Q Predicted by SCS, RSES, and DERS") %>%
+  kable_styling()
+
+model_step1 <- lm(SC2 ~ SC4 + SC5, data = summary_data_clean)
+
+model_step2 <- lm(SC2 ~ SC4 + SC5 + SC3, data = summary_data_clean)
+
+anova_comparison <- anova(model_step1, model_step2)
+
+hier_summary <- bind_rows(
+  tidy(model_step1, conf.int = TRUE)  %>% mutate(Model = "Step 1: RSES + DERS"),
+  tidy(model_step2, conf.int = TRUE)  %>% mutate(Model = "Step 2: + SCS")
+) %>%
+  rename(Predictor = term, Estimate = estimate, StdError = std.error,
+         Statistic = statistic, P.value = p.value, CI.lower = conf.low,
+         CI.upper = conf.high)
+
+kable(
+  hier_summary,
+  digits = 3,
+  caption = "Table 2. Hierarchical Regression Coefficients"
+) %>% kable_styling(full_width = FALSE)
+
+r2_table <- tibble(
+  Step       = c("Step 1", "Step 2"),
+  Predictors = c("RSES + DERS", "RSES + DERS + SCS"),
+  R2         = c(summary(model_step1)$r.squared,
+                 summary(model_step2)$r.squared)
+) %>%
+  mutate(Delta_R2 = R2 - lag(R2))
+
+kable(
+  r2_table,
+  digits = 3,
+  caption = "Table 3. R² and ΔR² by Step"
+) %>% kable_styling(full_width = FALSE)
+
+cat("\nANOVA: Step 1 vs. Step 2\n")
+print(anova_comparison)
+
+
+model <- model_EDE
+
+par(mfrow = c(1, 3))
+plot(summary_data_clean$SC3, summary_data_clean$SC2, main = "EDE-Q vs SCS",
+     xlab = "SCS", ylab = "EDE-Q", col = "darkblue")
+abline(lm(SC2 ~ SC3, data = summary_data_clean), col = "red")
+
+plot(summary_data_clean$SC4, summary_data_clean$SC2, main = "EDE-Q vs RSES",
+     xlab = "RSES", ylab = "EDE-Q", col = "darkgreen")
+abline(lm(SC2 ~ SC4, data = summary_data_clean), col = "red")
+
+plot(summary_data_clean$SC5, summary_data_clean$SC2, main = "EDE-Q vs DERS",
+     xlab = "DERS", ylab = "EDE-Q", col = "darkorange")
+abline(lm(SC2 ~ SC5, data = summary_data_clean), col = "red")
+
+par(mfrow = c(1, 1))
+plot(model, which = 1)  # Residuals vs Fitted
+
+plot(model, which = 2)  # Q-Q plot
+hist(residuals(model), main = "Histogram of Residuals", col = "lightgrey", xlab = "Residuals")
+
+library(car)
+vif_values <- vif(model)
+print("Variance Inflation Factor (VIF) for each predictor:")
+print(vif_values)
+
+plot(model, which = 4)  # Cook's Distance plot
+
+cooks_d <- cooks.distance(model)
+influential_points <- which(cooks_d > 4/length(cooks_d))  # Rule of thumb
+cat("Potential influential points (Cook's D > 4/n):\n")
+print(influential_points)
+
+#Durbin-Watson Test
+dw_result <- durbinWatsonTest(model)
+print("Durbin-Watson Test for Autocorrelation:")
+print(dw_result)
+
+# Pearsons
+full_corr <- psych::corr.test(
+  summary_data_clean %>% select(SC2, SC3, SC4, SC5),
+  use = "pairwise.complete.obs"
+)
+print(full_corr$r)    # correlations
+print(full_corr$p)    # p-values
+
+```
+
+
+```{r}
+#Code chunk 2 EFA
+
+data <- read_csv("/Users/matthewgibbs/Documents/Work/Coding/DissDataA+G2.csv", show_col_types = FALSE) %>%
+  filter(if_all(c(SC2, SC3, SC4, SC5), ~ .x != 0))
+
+edeq_items <- grep("^Q[0-9]+$", names(data), value = TRUE)
+edeq_df <- data %>%
+  select(all_of(edeq_items)) %>%
+  mutate(across(everything(), ~ as.numeric(as.character(.))))
+
+edeq_df <- edeq_df[rowSums(is.na(edeq_df)) <= 10, ]
+
+edeq_df <- edeq_df %>%
+  select(where(~ var(.x, na.rm = TRUE) > 0))
+
+cor_mat  <- cor(edeq_df, use = "pairwise.complete.obs")
+n_cases  <- nrow(edeq_df)
+
+omega_results <- omega(cor_mat, nfactors = 4, flip = TRUE)
+print(omega_results$omegaHierarchical)
+
+fa.parallel(cor_mat,
+            n.obs  = n_cases,
+            fa     = "fa",
+            n.iter = 100,
+            fm     = "ml")
+
+efa1 <- fa(
+  r        = cor_mat,
+  nfactors = 1,
+  fm       = "ml",
+  n.obs    = n_cases
+)
+print(efa1)
+
+```
+
+```{r}
+# Code Chunk 3 - Demographics & Scale Descriptives
+
+raw <- read_csv("/Users/matthewgibbs/Documents/Work/Coding/DissDataA+G2.csv", show_col_types = FALSE)
+
+data_clean <- raw %>%
+  mutate(
+    Gender = factor(Gender, levels = c("1", "2")),
+    Age    = as.numeric(Age),
+    SC2    = as.numeric(SC2),
+    SC3    = as.numeric(SC3),
+    SC4    = as.numeric(SC4),
+    SC5    = as.numeric(SC5)
+  )
+
+
+analytic <- data_clean %>%
+  filter(if_all(c(SC2, SC3, SC4, SC5), ~ .x != 0))
+
+analytic <- analytic %>% filter(!is.na(Gender))
+
+
+N_analytic <- nrow(analytic)  # should equal 138
+
+mean_ci <- function(x) {
+  x <- na.omit(x)
+  n  <- length(x)
+  m  <- mean(x)
+  sd <- sd(x)
+  err <- qt(.975, n - 1) * sd / sqrt(n)
+  tibble(M = m, SD = sd, CI_L = m - err, CI_U = m + err)
+}
+
+vars <- c(
+  Age  = "Age",
+  EDEQ = "SC2",
+  SCS  = "SC3",
+  RSES = "SC4",
+  DERS = "SC5"
+)
+
+var_labels <- c(
+  Age  = "Age",
+  SC2  = "EDE-Q total",
+  SC3  = "Self-Compassion Scale",
+  SC4  = "Rosenberg Self-Esteem",
+  SC5  = "DERS total"
+)
+
+overall_desc <- map_df(vars,
+  ~ mean_ci(analytic[[.x]]),
+  .id = "Variable"
+) %>%
+  mutate(N = N_analytic, .before = M) %>%
+  mutate(Variable = var_labels[Variable])
+
+by_gender_desc <- analytic %>%
+  pivot_longer(cols = c(Age, SC2, SC3, SC4, SC5),
+               names_to  = "var",
+               values_to = "val") %>%
+  group_by(Gender, var) %>%
+  summarise(
+    tibble::as_tibble(mean_ci(val)),
+    N = n(),
+    .groups = "drop"
+  ) %>%
+  rename(Variable = var) %>%
+  mutate(Variable = case_when(
+    Variable == "Age" ~ "Age",
+    Variable == "SC2" ~ "EDE-Q total",
+    Variable == "SC3" ~ "Self-Compassion Scale",
+    Variable == "SC4" ~ "Rosenberg Self-Esteem",
+    Variable == "SC5" ~ "DERS total",
+    TRUE              ~ Variable
+  )) %>%
+  select(Gender, N, Variable, M, SD, CI_L, CI_U)
+
+
+
+age_cor <- map_df(vars[-1], 
+  ~ {
+    test <- cor.test(analytic$Age, analytic[[.x]], conf.level = 0.95)
+    tibble(
+      Variable = names(vars)[vars == .x],
+      r        = unname(test$estimate),
+      p.value  = test$p.value,
+      CI_L     = test$conf.int[1],
+      CI_U     = test$conf.int[2]
+    )
+  }
+)
+
+
+gender_tt <- map_df(vars[-1],
+  ~ {
+    test <- t.test(analytic[[.x]] ~ analytic$Gender,
+                   var.equal = FALSE, conf.level = 0.95)
+    tibble(
+      Variable = names(vars)[vars == .x],
+      t        = test$statistic,
+      p.value  = test$p.value,
+      CI_L     = test$conf.int[1],
+      CI_U     = test$conf.int[2]
+    )
+  }
+)
+
+prop_fem <- prop.test(
+  x          = sum(analytic$Gender == "2"),
+  n          = N_analytic,
+  conf.level = 0.95
+)
+prop_female_tbl <- tibble(
+  Proportion_Female = unname(prop_fem$estimate),
+  CI_L              = prop_fem$conf.int[1],
+  CI_U              = prop_fem$conf.int[2]
+)
+
+overall_desc
+by_gender_desc
+age_cor
+gender_tt
+prop_female_tbl
+
+```
+
+```{r}
+# Code chunk 4
+
+raw <- read_csv("/Users/matthewgibbs/Documents/Work/Coding/DissDataA+G2.csv", show_col_types = FALSE)
+
+data_clean <- raw %>%
+  mutate(
+    Gender = factor(Gender, levels = c("1", "2")),
+    Age    = as.numeric(Age),
+    SC2    = as.numeric(SC2),
+    SC3    = as.numeric(SC3),
+    SC4    = as.numeric(SC4),
+    SC5    = as.numeric(SC5)
+  )
+
+analytic <- data_clean %>%
+  filter(if_all(c(SC2, SC3, SC4, SC5), ~ .x != 0))
+
+N_analytic <- nrow(analytic)  # should equal 138
+
+mean_ci <- function(x) {
+  x <- na.omit(x)
+  n  <- length(x)
+  m  <- mean(x)
+  sd <- sd(x)
+  err <- qt(.975, n - 1) * sd / sqrt(n)
+  tibble(M = m, SD = sd, CI_L = m - err, CI_U = m + err)
+}
+
+var_labels <- c(
+  Age  = "Age",
+  SC2  = "EDE-Q total",
+  SC3  = "Self-Compassion Scale",
+  SC4  = "Rosenberg Self-Esteem",
+  SC5  = "DERS total"
+)
+vars <- names(var_labels)   # c("Age","SC2","SC3","SC4","SC5")
+
+overall_desc <- map_df(vars,
+  ~ mean_ci(analytic[[.x]]),
+  .id = "Variable"
+) %>%
+  mutate(N = N_analytic, .before = M) %>%
+  # map the codes to labels
+  mutate(Variable = var_labels[Variable])
+
+by_gender_desc <- analytic %>%
+  pivot_longer(cols = all_of(vars),
+               names_to  = "Variable",
+               values_to = "Value") %>%
+  group_by(Gender, Variable) %>%
+  summarise(
+    mean_ci(Value),
+    N = n(),
+    .groups = "drop"
+  ) %>%
+  mutate(Variable = var_labels[Variable]) %>%
+  select(Gender, N, Variable, M, SD, CI_L, CI_U)
+
+age_cor <- map_df(vars[-1],  # drop Age itself
+  ~ {
+    test <- cor.test(analytic$Age, analytic[[.x]], conf.level = 0.95)
+    tibble(
+      Variable = var_labels[.x],
+      r        = unname(test$estimate),
+      p.value  = test$p.value,
+      CI_L     = test$conf.int[1],
+      CI_U     = test$conf.int[2]
+    )
+  }
+)
+
+
+
+gender_tt <- map_df(vars[-1],
+  ~ {
+    test <- t.test(analytic[[.x]] ~ analytic$Gender,
+                   var.equal  = FALSE,
+                   conf.level = 0.95)
+    tibble(
+      Variable = var_labels[.x],
+      t        = test$statistic,
+      p.value  = test$p.value,
+      CI_L     = test$conf.int[1],
+      CI_U     = test$conf.int[2]
+    )
+  }
+)
+
+prop_fem <- prop.test(
+  x          = sum(analytic$Gender == "2"),
+  n          = N_analytic,
+  conf.level = 0.95
+)
+prop_female_tbl <- tibble(
+  Proportion_Female = unname(prop_fem$estimate),
+  CI_L              = prop_fem$conf.int[1],
+  CI_U              = prop_fem$conf.int[2]
+)
+
+overall_desc
+by_gender_desc
+age_cor
+gender_tt
+prop_female_tbl
+
+```
+
+```{r}
+#Code Chunk 5
+
+
+
+data_raw <- read_csv("/Users/matthewgibbs/Documents/Work/Coding/DissDataA+G2.csv", show_col_types = FALSE)
+
+df <- data_raw %>% filter(if_all(c(SC2, SC3, SC4, SC5), ~ .x != 0))
+
+edeq_items <- names(df)[21:48]
+df <- df %>% select(all_of(edeq_items))
+df[] <- lapply(df, function(x) suppressWarnings(as.numeric(as.character(x))))
+
+e <- edeq_items
+res_items    <- e[1:5]
+eat_items    <- e[c(7, 9, 19, 20, 21)]
+shape_items  <- e[c(6, 8, 10, 11, 23, 26, 27, 28)]
+weight_items <- e[c(8, 12, 22, 24, 25)]
+
+pdf(NULL)
+alpha_res    <- psych::alpha(df[res_items],    check.keys = TRUE)
+alpha_eat    <- psych::alpha(df[eat_items],    check.keys = TRUE)
+alpha_shape  <- psych::alpha(df[shape_items],  check.keys = TRUE)
+alpha_weight <- psych::alpha(df[weight_items], check.keys = TRUE)
+alpha_total  <- psych::alpha(df,               check.keys = TRUE)
+dev.off()
+
+cat("Restraint α =",    round(alpha_res$total$raw_alpha,  2), "\n")
+cat("EatingConcern α =",round(alpha_eat$total$raw_alpha,  2), "\n")
+cat("ShapeConcern α =", round(alpha_shape$total$raw_alpha, 2), "\n")
+cat("WeightConcern α =",round(alpha_weight$total$raw_alpha, 2), "\n")
+cat("Total 28-item α =", round(alpha_total$total$raw_alpha, 2), "\n\n")
+
+df_scores <- df %>%
+  mutate(
+    Restraint     = rowMeans(across(all_of(res_items)),    na.rm = TRUE),
+    EatingConcern = rowMeans(across(all_of(eat_items)),    na.rm = TRUE),
+    ShapeConcern  = rowMeans(across(all_of(shape_items)),  na.rm = TRUE),
+    WeightConcern = rowMeans(across(all_of(weight_items)), na.rm = TRUE)
+  ) %>%
+  mutate(GlobalMean = rowMeans(across(c(Restraint, EatingConcern, ShapeConcern, WeightConcern)), na.rm = TRUE))
+
+tests <- lapply(
+  list(Restraint=df_scores$Restraint, EatingConcern=df_scores$EatingConcern,
+       ShapeConcern=df_scores$ShapeConcern, WeightConcern=df_scores$WeightConcern),
+  function(x) cor.test(x, df_scores$GlobalMean, use = "complete.obs")
+)
+names(tests) <- c("Restraint","EatingConcern","ShapeConcern","WeightConcern")
+for (nm in names(tests)) {
+  t <- tests[[nm]]
+  cat(nm, ": r =", round(t$estimate,3), ", p =", format.pval(t$p.value, digits=3), "\n")
+}
+
+
+df_all   <- data_raw %>% filter(if_all(c(SC2, SC3, SC4, SC5), ~ .x != 0))
+```
+
